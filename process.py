@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -671,9 +672,52 @@ def _link_macos_keychains(isolated_home: Path) -> None:
         os.symlink(real_keychains, isolated_keychains, target_is_directory=True)
 
 
+# Names that look like credentials. Hermes itself runs with gateway and dashboard secrets in its
+# environment (SLACK_BOT_TOKEN, TELEGRAM_BOT_TOKEN, *_API_KEY, ...); agy is a closed-source binary and
+# has no use for any of them, so they are removed from the child environment by default.
+_SECRET_NAME_RE = re.compile(
+    r"(^|_)(TOKEN|TOKENS|SECRET|SECRETS|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIALS?|AUTH)($|_)",
+    re.IGNORECASE,
+)
+# Names that match the pattern but are not Hermes secrets and that agy or git over ssh may need.
+_SECRET_NAME_ALLOW = frozenset({"SSH_AUTH_SOCK", "GPG_AGENT_INFO"})
+
+
+def _env_names(var: str) -> set[str]:
+    return {n.strip() for n in os.environ.get(var, "").split(",") if n.strip()}
+
+
+def _filtered_parent_env() -> dict[str, str]:
+    """Parent environment minus anything that looks like a credential.
+
+    ``ANTIGRAVITY_ENV_PASSTHROUGH`` (comma separated names) keeps specific variables that the
+    pattern would drop. ``ANTIGRAVITY_ENV_STRICT=1`` goes further and passes only the variables
+    named in ``ANTIGRAVITY_ENV_ALLOWLIST`` plus a minimal baseline (PATH, locale, TERM, TZ,
+    proxy and certificate variables).
+    """
+    keep = _env_names("ANTIGRAVITY_ENV_PASSTHROUGH")
+    if os.environ.get("ANTIGRAVITY_ENV_STRICT", "").strip() == "1":
+        baseline = {
+            "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM",
+            "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+            "SSL_CERT_FILE", "SSL_CERT_DIR", "SSH_AUTH_SOCK",
+            "AGY_CLI_DISABLE_AUTO_UPDATE", "AGY_CLI_MODEL_API_MAX_RETRIES",
+        }
+        allowed = baseline | _env_names("ANTIGRAVITY_ENV_ALLOWLIST") | keep
+        return {k: v for k, v in os.environ.items() if k in allowed}
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if k in keep or k in _SECRET_NAME_ALLOW or not _SECRET_NAME_RE.search(k)
+    }
+
+
 def build_child_env(isolated_home: Path | str) -> dict[str, str]:
-    """Construct child environment isolating home and session storage on POSIX and Windows."""
-    env = dict(os.environ)
+    """Construct child environment isolating home and session storage on POSIX and Windows.
+
+    Credential-looking variables from the parent (Hermes) environment are not passed to agy.
+    """
+    env = _filtered_parent_env()
     home_str = str(isolated_home)
     env["HOME"] = home_str
     # Windows: Go's os.UserHomeDir() reads USERPROFILE then HOMEDRIVE+HOMEPATH

@@ -104,5 +104,72 @@ class ChildEnvTests(unittest.TestCase):
         self.assertIn("SSH_AUTH_SOCK", child_env)
 
 
+class ChildEnvSecretScrubbingTests(unittest.TestCase):
+    """Hermes runs with gateway and dashboard secrets in its environment; agy must not receive them."""
+
+    SECRETS = {
+        "SLACK_BOT_TOKEN": "xoxb-secret",
+        "SLACK_APP_TOKEN": "xapp-secret",
+        "TELEGRAM_BOT_TOKEN": "tg-secret",
+        "HERMES_DASHBOARD_SECRET": "dash-secret",
+        "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH": "hash",
+        "OPENAI_API_KEY": "sk-secret",
+        "GEMINI_API_KEY": "g-secret",
+        "AWS_SECRET_ACCESS_KEY": "aws-secret",
+        "GITHUB_TOKEN": "ghp-secret",
+    }
+    HARMLESS = {
+        "PATH": "/usr/bin",
+        "LANG": "C.UTF-8",
+        "HTTPS_PROXY": "http://proxy:3128",
+        "SSL_CERT_FILE": "/etc/ssl/cert.pem",
+        "SSH_AUTH_SOCK": "/tmp/agent.sock",
+        "AGY_CLI_DISABLE_AUTO_UPDATE": "1",
+        "TOKENIZERS_PARALLELISM": "false",
+        "MONKEY": "banana",
+    }
+
+    def _build(self, extra=None):
+        env = {**self.SECRETS, **self.HARMLESS, **(extra or {})}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("process.os.name", "posix"):
+                with patch("process.resolve_real_token_path", return_value=Path("/tok")):
+                    return build_child_env("/isolated/home")
+
+    def test_credential_looking_variables_are_not_passed(self):
+        child = self._build()
+        for name in self.SECRETS:
+            self.assertNotIn(name, child)
+
+    def test_ordinary_variables_proxy_and_ssh_agent_are_kept(self):
+        child = self._build()
+        for name, value in self.HARMLESS.items():
+            self.assertEqual(child[name], value)
+
+    def test_passthrough_keeps_named_variables(self):
+        child = self._build({"ANTIGRAVITY_ENV_PASSTHROUGH": "GEMINI_API_KEY, GITHUB_TOKEN"})
+        self.assertEqual(child["GEMINI_API_KEY"], "g-secret")
+        self.assertEqual(child["GITHUB_TOKEN"], "ghp-secret")
+        self.assertNotIn("SLACK_BOT_TOKEN", child)
+
+    def test_strict_mode_passes_only_baseline_and_allowlist(self):
+        child = self._build({"ANTIGRAVITY_ENV_STRICT": "1", "ANTIGRAVITY_ENV_ALLOWLIST": "MONKEY"})
+        self.assertEqual(child["PATH"], "/usr/bin")
+        self.assertEqual(child["HTTPS_PROXY"], "http://proxy:3128")
+        self.assertEqual(child["MONKEY"], "banana")
+        self.assertNotIn("TOKENIZERS_PARALLELISM", child)
+        for name in self.SECRETS:
+            self.assertNotIn(name, child)
+        self.assertEqual(child["HOME"], "/isolated/home")
+
+    def test_parent_environment_is_not_modified(self):
+        env = {**self.SECRETS, **self.HARMLESS}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("process.os.name", "posix"):
+                with patch("process.resolve_real_token_path", return_value=Path("/tok")):
+                    build_child_env("/isolated/home")
+            self.assertEqual(os.environ["SLACK_BOT_TOKEN"], "xoxb-secret")
+
+
 if __name__ == "__main__":
     unittest.main()

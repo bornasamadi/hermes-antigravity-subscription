@@ -55,6 +55,18 @@ Models that ignore the protocol attempt `agy`'s native `RunCommand`/`WriteToFile
 
 ---
 
+## Environment passed to `agy`
+
+Hermes often runs with gateway and dashboard secrets in its environment (`SLACK_BOT_TOKEN`, `TELEGRAM_BOT_TOKEN`, `*_API_KEY`, ...). `agy` is a closed-source binary and does not need any of them, so the child environment is the parent environment **minus credential-looking variables** (names containing `TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `ACCESS_KEY`, `PRIVATE_KEY`, `CREDENTIAL(S)` or `AUTH`). `SSH_AUTH_SOCK` and proxy/certificate variables are kept.
+
+| Variable | Effect |
+| :--- | :--- |
+| `ANTIGRAVITY_ENV_PASSTHROUGH` | Comma-separated names to keep even if they look like credentials. |
+| `ANTIGRAVITY_ENV_STRICT=1` | Pass only a minimal baseline (`PATH`, locale, `TERM`, `TZ`, proxy, certificate and `SSH_AUTH_SOCK` variables) plus `ANTIGRAVITY_ENV_ALLOWLIST` and `ANTIGRAVITY_ENV_PASSTHROUGH`. |
+| `ANTIGRAVITY_ENV_ALLOWLIST` | Comma-separated names to add in strict mode. |
+
+---
+
 ## Security Model
 
 ```
