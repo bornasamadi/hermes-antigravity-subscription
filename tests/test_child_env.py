@@ -162,6 +162,51 @@ class ChildEnvSecretScrubbingTests(unittest.TestCase):
             self.assertNotIn(name, child)
         self.assertEqual(child["HOME"], "/isolated/home")
 
+    def test_value_secret_conventions_are_scrubbed(self):
+        extra = {
+            "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/T/B/x",
+            "DISCORD_WEBHOOK": "https://discord.com/api/webhooks/1/x",
+            "DATABASE_URL": "postgres://u:p@h/db",
+            "REDIS_URL": "redis://:p@h",
+            "MONGO_URI": "mongodb://u:p@h",
+            "SENTRY_DSN": "https://k@o.ingest.sentry.io/1",
+            "COOKIE": "session=abc",
+        }
+        child = self._build(extra)
+        for name in extra:
+            self.assertNotIn(name, child)
+
+    def test_dbus_session_address_is_kept_for_keyring_signin(self):
+        child = self._build({"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"})
+        self.assertIn("DBUS_SESSION_BUS_ADDRESS", child)
+
+    def test_strict_mode_accepts_usual_truthy_spellings(self):
+        for value in ("1", "true", "True ", "YES", "on"):
+            child = self._build({"ANTIGRAVITY_ENV_STRICT": value})
+            self.assertNotIn("MONKEY", child, value)
+            self.assertIn("PATH", child, value)
+
+    def test_strict_mode_keeps_temp_dirs_and_all_locale_variables(self):
+        child = self._build({
+            "ANTIGRAVITY_ENV_STRICT": "1",
+            "TMPDIR": "/var/tmp",
+            "LANGUAGE": "en",
+            "LC_TIME": "C",
+            "LC_NUMERIC": "C",
+        })
+        for name in ("TMPDIR", "LANGUAGE", "LC_TIME", "LC_NUMERIC"):
+            self.assertIn(name, child)
+
+    def test_names_are_matched_case_insensitively_on_windows(self):
+        env = {"Path": r"C:\Windows", "Ssh_Auth_Sock": "sock", "Slack_Bot_Token": "t", "Monkey": "m"}
+        with patch.dict(os.environ, {**env, "ANTIGRAVITY_ENV_PASSTHROUGH": "monkey"}, clear=True):
+            with patch("process.os.name", "nt"):
+                with patch("process.resolve_real_token_path", return_value=Path("/tok")):
+                    child = build_child_env(r"C:\isolated\home")
+        self.assertIn("Ssh_Auth_Sock", child)
+        self.assertIn("Monkey", child)
+        self.assertNotIn("Slack_Bot_Token", child)
+
     def test_parent_environment_is_not_modified(self):
         env = {**self.SECRETS, **self.HARMLESS}
         with patch.dict(os.environ, env, clear=True):
