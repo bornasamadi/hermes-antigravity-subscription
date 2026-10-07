@@ -197,6 +197,16 @@ class ChildEnvSecretScrubbingTests(unittest.TestCase):
         for name in ("TMPDIR", "LANGUAGE", "LC_TIME", "LC_NUMERIC"):
             self.assertIn(name, child)
 
+    def test_strict_mode_keeps_lowercase_proxy_variables(self):
+        child = self._build({
+            "ANTIGRAVITY_ENV_STRICT": "1",
+            "http_proxy": "http://proxy:3128",
+            "https_proxy": "http://proxy:3128",
+            "no_proxy": "localhost",
+        })
+        for name in ("http_proxy", "https_proxy", "no_proxy"):
+            self.assertIn(name, child)
+
     def test_names_are_matched_case_insensitively_on_windows(self):
         env = {"Path": r"C:\Windows", "Ssh_Auth_Sock": "sock", "Slack_Bot_Token": "t", "Monkey": "m"}
         with patch.dict(os.environ, {**env, "ANTIGRAVITY_ENV_PASSTHROUGH": "monkey"}, clear=True):
